@@ -83,7 +83,7 @@
       </el-form>
     </div>
     <div class="footer">
-      <a href="https://github.com/eooce/webssh" target="_blank" rel="noopener noreferrer">WebSSH Console | Powered by eooce</a>
+      <a href="https://github.com/adamj001/webssh-lw" target="_blank" rel="noopener noreferrer">wssh</a>
     </div>
   </div>
 </template>
@@ -746,4 +746,5 @@ export default {
   border: 1px solid rgba(255, 255, 255, 0.2) !important;
 }
 </style>
+
 

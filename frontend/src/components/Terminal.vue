@@ -9,8 +9,8 @@
       </div>
     </div>
     <div class="terminal-footer">
-      <span>WebSSH Console | Powered by eooce</span>
-      <a href="https://github.com/eooce/webssh" target="_blank" class="github-link" title="GitHub">
+    
+      <a href="https://github.com/adamj001/webssh-lw" target="_blank" class="github-link" title="GitHub">
         <i class="fab fa-github"></i>
       </a>
       <button @click="toggleSftpPanel" class="sftp-toggle-btn" title="文件管理">

@@ -10,25 +10,25 @@
       <el-form :model="sshInfo" label-position="top" class="form-grid">
                  <el-row :gutter="20">
            <el-col :span="12">
-             <el-form-item label="主机地址 (Hostname)">
-               <el-input ref="hostnameInput" v-model="sshInfo.hostname" placeholder="请输入主机地址" />
+             <el-form-item label="地址 (Hostname)">
+               <el-input ref="hostnameInput" v-model="sshInfo.hostname" placeholder="IP or Hostname" />
              </el-form-item>
            </el-col>
            <el-col :span="12">
              <el-form-item label="端口 (Port)">
-               <el-input v-model.number="sshInfo.port" placeholder="请输入端口(默认22)" />
+               <el-input v-model.number="sshInfo.port" placeholder="22)" />
              </el-form-item>
            </el-col>
          </el-row>
                  <el-row :gutter="20">
            <el-col :span="12">
              <el-form-item label="用户名 (Username)">
-               <el-input ref="usernameInput" v-model="sshInfo.username" placeholder="请输入用户名" />
+               <el-input ref="usernameInput" v-model="sshInfo.username" placeholder="username" />
              </el-form-item>
            </el-col>
            <el-col :span="12">
              <el-form-item label="密码 (Password)">
-               <el-input ref="passwordInput" v-model="sshInfo.password" type="password" placeholder="请输入密码" show-password/>
+               <el-input ref="passwordInput" v-model="sshInfo.password" type="password" placeholder="password" show-password/>
              </el-form-item>
            </el-col>
          </el-row>
@@ -62,7 +62,7 @@
         <el-row>
           <el-col :span="24">
             <el-form-item label="初始命令 (Initial command)">
-              <el-input v-model="sshInfo.command" placeholder="登录后要执行的命令" />
+              <el-input v-model="sshInfo.command" placeholder="Command after login" />
             </el-form-item>
           </el-col>
         </el-row>
@@ -746,5 +746,6 @@ export default {
   border: 1px solid rgba(255, 255, 255, 0.2) !important;
 }
 </style>
+
 
 

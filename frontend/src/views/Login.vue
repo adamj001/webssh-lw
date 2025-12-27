@@ -1,14 +1,18 @@
 <template>
   <div class="login-container" :class="{ 'dark-theme': isDarkTheme }">
-    <div class="theme-switch-wrapper">
-      <div class="theme-switch" @click="toggleTheme">
-        <i class="fas" :class="isDarkTheme ? 'fa-sun' : 'fa-moon'" style="margin-top: -30px;"></i>
+    
+    <div class="top-right-wrapper">
+      <div class="icon-btn setting-btn" @click="showGithubDialog = true" title="GitHub 云同步配置">
+        <i class="el-icon-setting"></i>
+      </div>
+      <div class="theme-switch" @click="toggleTheme" title="切换主题">
+        <i class="fas" :class="isDarkTheme ? 'fa-sun' : 'fa-moon'"></i>
       </div>
     </div>
+
     <div class="card" style="margin: 20px auto;">
-    
       <el-form :model="sshInfo" label-position="top" class="form-grid">
-                 <el-row :gutter="20">
+         <el-row :gutter="20">
            <el-col :span="12">
              <el-form-item label="地址 (Hostname)">
                <el-input ref="hostnameInput" v-model="sshInfo.hostname" placeholder="IP or Hostname" />
@@ -16,11 +20,11 @@
            </el-col>
            <el-col :span="12">
              <el-form-item label="端口 (Port)">
-               <el-input v-model.number="sshInfo.port" placeholder="22)" />
+               <el-input v-model.number="sshInfo.port" placeholder="22" />
              </el-form-item>
            </el-col>
          </el-row>
-                 <el-row :gutter="20">
+         <el-row :gutter="20">
            <el-col :span="12">
              <el-form-item label="用户名 (Username)">
                <el-input ref="usernameInput" v-model="sshInfo.username" placeholder="username" />
@@ -32,7 +36,7 @@
              </el-form-item>
            </el-col>
          </el-row>
-                 <el-row :gutter="20">
+         <el-row :gutter="20">
            <el-col :xs="24" :sm="12">
              <el-form-item label="私钥 (Private Key)">
                <el-upload
@@ -66,11 +70,16 @@
             </el-form-item>
           </el-col>
         </el-row>
-        <el-row type="flex" justify="center" style="margin-top: 10px;">
-          <el-button type="danger" icon="el-icon-refresh" @click="onReset">重置输入</el-button>
+        
+        <el-row type="flex" justify="center" style="margin-top: 10px; flex-wrap: wrap; gap: 10px;">
+          <el-button type="danger" icon="el-icon-refresh" @click="onReset">重置</el-button>
+          
+          <el-button type="warning" icon="el-icon-upload2" :loading="githubLoading" @click="syncToGitHub">云端保存</el-button>
+          
           <el-button type="primary" icon="el-icon-link" @click="onGenerateLink">生成链接</el-button>
           <el-button type="success" @click="onConnect"><i class="fas fa-terminal" style="margin-right: 6px;"></i>连接SSH</el-button>
         </el-row>
+
         <el-row v-if="generatedLink" style="margin-top: 18px;">
           <el-col :span="24">
             <el-input v-model="generatedLink" readonly class="gen-link-input">
@@ -82,13 +91,39 @@
         </el-row>
       </el-form>
     </div>
+
     <div class="footer">
       <a href="https://github.com/adamj001/webssh-lw" target="_blank" rel="noopener noreferrer">wssh</a>
     </div>
+
+    <el-dialog title="GitHub 云同步配置" :visible.sync="showGithubDialog" width="90%" :custom-class="isDarkTheme ? 'dark-dialog' : ''" append-to-body>
+      <el-form :model="githubConfig" label-width="100px" size="small">
+        <el-form-item label="Token">
+          <el-input v-model="githubConfig.token" type="password" show-password placeholder="ghp_xxxxxxxx..."></el-input>
+          <div style="font-size:12px; opacity: 0.7;">需勾选 repo 权限</div>
+        </el-form-item>
+        <el-form-item label="用户名">
+          <el-input v-model="githubConfig.owner" placeholder="GitHub Username"></el-input>
+        </el-form-item>
+        <el-form-item label="仓库名">
+          <el-input v-model="githubConfig.repo" placeholder="Repository Name (私库)"></el-input>
+        </el-form-item>
+        <el-form-item label="文件路径">
+          <el-input v-model="githubConfig.path" placeholder="例如: data/ssh_list.json"></el-input>
+        </el-form-item>
+      </el-form>
+      <span slot="footer" class="dialog-footer">
+        <el-button @click="showGithubDialog = false">取 消</el-button>
+        <el-button type="primary" @click="saveGithubSettings">保存配置</el-button>
+      </span>
+    </el-dialog>
+
   </div>
 </template>
 
 <script>
+import axios from 'axios' // 引入 axios
+
 export default {
   data () {
     return {
@@ -103,7 +138,17 @@ export default {
       },
       privateKeyFileName: '',
       generatedLink: '',
-      isDarkTheme: false
+      isDarkTheme: false,
+      
+      // GitHub 相关数据
+      showGithubDialog: false,
+      githubLoading: false,
+      githubConfig: {
+        token: '',
+        owner: '',
+        repo: '',
+        path: 'ssh_hosts.json' // 默认文件名
+      }
     }
   },
   watch: {
@@ -115,6 +160,12 @@ export default {
     }
   },
   created() {
+    // 恢复 GitHub 配置
+    const ghConfig = localStorage.getItem('gh_config');
+    if (ghConfig) {
+      this.githubConfig = JSON.parse(ghConfig);
+    }
+
     // 从 localStorage 恢复完整的连接信息
     const savedInfo = localStorage.getItem('connectionInfo')
     if (savedInfo) {
@@ -128,7 +179,6 @@ export default {
         passphrase: info.passphrase || '',
         command: info.command || ''
       }
-      // 如果有私钥，恢复文件名显示
       if (info.privateKey) {
         this.privateKeyFileName = '已保存的密钥文件'
       }
@@ -147,6 +197,90 @@ export default {
     document.head.appendChild(link)
   },
   methods: {
+    // 保存 GitHub 设置
+    saveGithubSettings() {
+      localStorage.setItem('gh_config', JSON.stringify(this.githubConfig));
+      this.showGithubDialog = false;
+      this.$message.success('GitHub 配置已保存');
+    },
+
+    // 核心：同步到 GitHub
+    async syncToGitHub() {
+      const { token, owner, repo, path } = this.githubConfig;
+      if (!token || !owner || !repo) {
+        this.$message.warning('请先点击右上角设置图标配置 GitHub 信息');
+        this.showGithubDialog = true;
+        return;
+      }
+      if (!this.sshInfo.hostname || !this.sshInfo.username) {
+         this.$message.error('主机名和用户名不能为空');
+         return;
+      }
+
+      this.githubLoading = true;
+      const apiUrl = `https://api.github.com/repos/${owner}/${repo}/contents/${path}`;
+      const headers = {
+        'Authorization': `token ${token}`,
+        'Accept': 'application/vnd.github.v3+json'
+      };
+
+      // 构造唯一索引 Key
+      const uniqueKey = `${this.sshInfo.hostname}_${this.sshInfo.username}`;
+      // 准备要保存的数据 (去掉了私钥，因为私钥太大且敏感，建议只存基本信息，或者你自己决定是否存)
+      const dataToSave = {
+        hostname: this.sshInfo.hostname,
+        port: this.sshInfo.port,
+        username: this.sshInfo.username,
+        command: this.sshInfo.command,
+        updated_at: new Date().toLocaleString(),
+        remark: 'WebSSH Sync'
+      };
+
+      try {
+        // 1. 获取现有文件 (为了拿到 sha 和现有内容)
+        let existingContent = {};
+        let sha = null;
+
+        try {
+          const res = await axios.get(apiUrl, { headers });
+          sha = res.data.sha;
+          // 解码 Base64 内容 (处理中文)
+          const decodedContent = decodeURIComponent(escape(window.atob(res.data.content)));
+          existingContent = JSON.parse(decodedContent);
+        } catch (error) {
+          if (error.response && error.response.status === 404) {
+             // 文件不存在，跳过读取，直接新建
+          } else {
+            throw error;
+          }
+        }
+
+        // 2. 更新或新增数据
+        existingContent[uniqueKey] = dataToSave;
+
+        // 3. 推送更新
+        const contentBase64 = window.btoa(unescape(encodeURIComponent(JSON.stringify(existingContent, null, 2))));
+        
+        const payload = {
+          message: `Update SSH: ${uniqueKey}`,
+          content: contentBase64
+        };
+        if (sha) payload.sha = sha;
+
+        await axios.put(apiUrl, payload, { headers });
+        this.$message.success(`已保存到 GitHub: ${uniqueKey}`);
+
+      } catch (e) {
+        console.error(e);
+        let msg = '同步失败';
+        if(e.response && e.response.status === 401) msg = 'GitHub Token 无效';
+        if(e.response && e.response.status === 404) msg = '仓库未找到';
+        this.$message.error(msg);
+      } finally {
+        this.githubLoading = false;
+      }
+    },
+
     onConnect () {
       // 清除之前的认证信息
       sessionStorage.removeItem('sshInfo')
@@ -183,7 +317,6 @@ export default {
         this.privateKeyFileName = ''
       }
 
-      // 保存完整连接信息到 localStorage
       const connectionInfo = {
         hostname: this.sshInfo.hostname,
         port: this.sshInfo.port || 22,
@@ -195,7 +328,6 @@ export default {
       }
       localStorage.setItem('connectionInfo', JSON.stringify(connectionInfo))
 
-      // 构建查询参数
       const query = {
         hostname: encodeURIComponent(this.sshInfo.hostname),
         port: Number(this.sshInfo.port) || 22,
@@ -203,22 +335,17 @@ export default {
         command: encodeURIComponent(this.sshInfo.command || '')
       }
 
-      // 根据登录方式设置认证信息
       if (this.sshInfo.privateKey && this.sshInfo.privateKey.trim()) {
-        // 使用密钥登录
         sessionStorage.setItem('sshInfo', JSON.stringify(this.sshInfo))
         query.useKey = 1
       } else if (this.sshInfo.password) {
-        // 使用密码登录
         query.password = btoa(this.sshInfo.password)
       }
 
-      // 新标签页打开
       const url = this.$router.resolve({ path: '/terminal', query }).href
       window.open(url, '_blank')
     },
     onReset () {
-      // 清除表单数据
       this.sshInfo = { 
         hostname: '', 
         port: '', 
@@ -230,12 +357,8 @@ export default {
       }
       this.privateKeyFileName = ''
       this.generatedLink = ''
-
-      // 清除所有存储的认证信息
       localStorage.removeItem('connectionInfo')
       sessionStorage.removeItem('sshInfo')
-
-      // 清除文件输入框
       const fileInput = document.querySelector('.upload-key input[type="file"]')
       if (fileInput) {
         fileInput.value = ''
@@ -297,22 +420,59 @@ export default {
       localStorage.setItem('isDarkTheme', this.isDarkTheme);
     },
     handlePrivateKeyUpload(file) {
-      // 上传密钥时清除密码，确保使用密钥登录
       this.sshInfo.password = ''
-      
       const reader = new FileReader()
       reader.onload = (e) => {
         this.sshInfo.privateKey = e.target.result
         this.privateKeyFileName = file.name
       }
       reader.readAsText(file)
-      return false // 阻止自动上传
+      return false
     }
   }
 }
 </script>
 
 <style lang="scss" scoped>
+/* 为了适应新的右上角布局，修改了这里 */
+.top-right-wrapper {
+  position: absolute;
+  top: 25px;
+  right: 30px;
+  z-index: 10;
+  display: flex;
+  gap: 15px; /* 图标之间的间距 */
+}
+
+.icon-btn, .theme-switch {
+  width: 40px;
+  height: 40px;
+  border-radius: 50%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+  transition: background-color 0.3s;
+  background-color: var(--switch-bg); /* 给按钮加个背景色，防止在深色图上看不清 */
+  box-shadow: 0 2px 5px rgba(0,0,0,0.1);
+}
+
+.icon-btn:hover, .theme-switch:hover {
+  filter: brightness(0.9);
+}
+
+.icon-btn i, .theme-switch i {
+  font-size: 20px;
+  color: var(--icon-color);
+  transition: color 0.3s;
+}
+
+/* 修复原有的 icon 位置问题 */
+.theme-switch i {
+  margin-top: 0; /* 去掉了原来的 -30px，使用 flex 居中更稳 */
+}
+
+
 .login-container ::v-deep .el-input__inner {
   font-size: medium;
   border-radius: 10px;
@@ -341,7 +501,6 @@ export default {
   opacity: 1;
 }
 
-/* 密码显示/隐藏按钮样式 */
 .login-container ::v-deep .el-input__suffix {
   background: transparent;
   margin-right: 5px;
@@ -386,7 +545,6 @@ export default {
   opacity: 1;
 }
 
-/* 深色主题密码显示/隐藏按钮样式 */
 .login-container.dark-theme ::v-deep .el-input__suffix {
   background: transparent;
   margin-right: 5px;
@@ -437,32 +595,6 @@ export default {
   position: relative;
   transition: background-color 0.3s, box-shadow 0.3s, backdrop-filter 0.3s;
   border: 1px solid rgba(255, 255, 255, 0.1);
-}
-
-.title {
-  text-align: center;
-  font-size: 2.5rem;
-  font-weight: 800;
-  color: var(--title-color);
-  margin-bottom: 2.3rem;
-  letter-spacing: 1px;
-  position: relative;
-  padding-bottom: 1rem;
-  font-family: none;
-  transition: color 0.3s;
-}
-
-.title::after {
-  content: '';
-  position: absolute;
-  bottom: 0;
-  left: 50%;
-  transform: translateX(-50%);
-  width: 300px;
-  height: 4px;
-  background-color: var(--title-color);
-  border-radius: 2px;
-  transition: background-color 0.3s;
 }
 
 .form-grid ::v-deep .el-form-item__label {
@@ -544,7 +676,6 @@ export default {
   border: 1px solid rgba(255, 255, 255, 0.3);
 }
 
-/* 移动端响应式优化*/
 @media (max-width: 768px) {
   .card{
     width: 98% !important;
@@ -560,7 +691,6 @@ export default {
     margin-top: 8px !important;
   }
   
-  /* 手机端底部间距调整，避免与footer重合 */
   .login-container {
     padding-bottom: 120px !important;
     min-height: auto !important;
@@ -574,6 +704,12 @@ export default {
   
   .card {
     margin: 10px auto !important;
+  }
+  
+  /* 移动端调整一下顶部图标位置 */
+  .top-right-wrapper {
+    top: 15px;
+    right: 15px;
   }
 }
 
@@ -626,37 +762,12 @@ export default {
   color: #05d899;
 }
 
-.theme-switch-wrapper {
-  position: absolute;
-  top: 25px;
-  right: 30px;
-  z-index: 10;
-}
-
-.theme-switch {
-  width: 40px;
-  height: 40px;
-  border-radius: 50%;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  cursor: pointer;
-  transition: background-color 0.3s;
-}
-
-.theme-switch i {
-  margin-top: -20px;
-  font-size: 20px;
-  color: var(--icon-color);
-  transition: color 0.3s;
-}
-
 /* Light theme variables */
 .login-container {
   --bg-color: #ffff;
   --bg-image: url('/static/img/bg_light.webp');
   --card-bg: hsl(0deg 0% 100% / 15%);
-  --title-color: #1b58c9; /* Darker blue for title */
+  --title-color: #1b58c9;
   --text-color: #3b3d3d;
   --shadow: 0 4px 6px rgba(0, 0, 0, 0.1);
   --success: #13af54;
@@ -687,37 +798,31 @@ export default {
   --icon-color: #f5f5f5;
 }
 
-/* Button styles with custom hover colors */
 .el-button--success {
   background-color: var(--success);
   border-color: var(--success);
   color: white;
 }
-
 .el-button--danger {
   background-color: var(--danger);
   border-color: var(--danger);
   color: white;
 }
-
 .el-button--primary {
   background-color: var(--primary);
   border-color: var(--primary);
   color: white;
 }
-
 .el-button--success:hover {
   background-color: var(--success-hover);
   border-color: var(--success-hover);
   color: white;
 }
-
 .el-button--danger:hover {
   background-color: var(--danger-hover);
   border-color: var(--danger-hover);
   color: white;
 }
-
 .el-button--primary:hover {
   background-color: var(--primary-hover);
   border-color: var(--primary-hover);
@@ -745,7 +850,20 @@ export default {
   -webkit-backdrop-filter: blur(5px) !important;
   border: 1px solid rgba(255, 255, 255, 0.2) !important;
 }
+
+/* 深色主题下 Dialog 的适配 */
+::v-deep .dark-dialog {
+  background: #2d2d2d;
+}
+::v-deep .dark-dialog .el-dialog__title {
+  color: #fff;
+}
+::v-deep .dark-dialog .el-form-item__label {
+  color: #ccc;
+}
+::v-deep .dark-dialog .el-input__inner {
+  background-color: #333;
+  border-color: #555;
+  color: #fff;
+}
 </style>
-
-
-

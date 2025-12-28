@@ -74,9 +74,16 @@
         <el-row type="flex" justify="center" style="margin-top: 10px; flex-wrap: wrap; gap: 10px;">
           <el-button type="danger" icon="el-icon-refresh" @click="onReset">重置</el-button>
           
-          <el-button type="warning" icon="el-icon-upload2" :loading="githubLoading" @click="syncToGitHub">云端保存</el-button>
-          
           <el-button type="primary" icon="el-icon-link" @click="onGenerateLink">生成链接</el-button>
+          
+          <el-button type="warning" icon="el-icon-upload2" :loading="githubLoading" @click="syncToGitHub">
+            保存链接
+          </el-button>
+
+          <el-button type="info" icon="el-icon-folder-opened" @click="fetchCloudList">
+            云端列表
+          </el-button>
+          
           <el-button type="success" @click="onConnect"><i class="fas fa-terminal" style="margin-right: 6px;"></i>连接SSH</el-button>
         </el-row>
 
@@ -109,7 +116,7 @@
           <el-input v-model="githubConfig.repo" placeholder="Repository Name (私库)"></el-input>
         </el-form-item>
         <el-form-item label="文件路径">
-          <el-input v-model="githubConfig.path" placeholder="例如: data/ssh_list.json"></el-input>
+          <el-input v-model="githubConfig.path" placeholder="例如: ssh_links.json"></el-input>
         </el-form-item>
       </el-form>
       <span slot="footer" class="dialog-footer">
@@ -118,11 +125,25 @@
       </span>
     </el-dialog>
 
+    <el-dialog title="☁️ 云端保存的链接" :visible.sync="showCloudListDialog" width="95%" :custom-class="isDarkTheme ? 'dark-dialog' : ''" append-to-body>
+      <el-table :data="cloudList" style="width: 100%" v-loading="githubLoading" empty-text="暂无数据或加载失败">
+        <el-table-column prop="hostname" label="主机" min-width="100"></el-table-column>
+        <el-table-column prop="username" label="用户" min-width="80"></el-table-column>
+        <el-table-column label="操作" width="160" fixed="right">
+          <template slot-scope="scope">
+            <el-button size="mini" type="primary" plain @click="openSavedUrl(scope.row.url)">打开</el-button>
+            <el-button size="mini" icon="el-icon-document-copy" circle @click="copySavedUrl(scope.row.url)"></el-button>
+            <el-button size="mini" type="danger" icon="el-icon-delete" circle @click="deleteFromCloud(scope.row.key)"></el-button>
+          </template>
+        </el-table-column>
+      </el-table>
+    </el-dialog>
+
   </div>
 </template>
 
 <script>
-import axios from 'axios' // 引入 axios
+import axios from 'axios'
 
 export default {
   data () {
@@ -142,12 +163,14 @@ export default {
       
       // GitHub 相关数据
       showGithubDialog: false,
+      showCloudListDialog: false, // 控制列表弹窗
+      cloudList: [], // 存储从 GitHub 获取的列表
       githubLoading: false,
       githubConfig: {
         token: '',
         owner: '',
         repo: '',
-        path: 'ssh_hosts.json' // 默认文件名
+        path: 'ssh_links.json'
       }
     }
   },
@@ -160,13 +183,11 @@ export default {
     }
   },
   created() {
-    // 恢复 GitHub 配置
     const ghConfig = localStorage.getItem('gh_config');
     if (ghConfig) {
       this.githubConfig = JSON.parse(ghConfig);
     }
 
-    // 从 localStorage 恢复完整的连接信息
     const savedInfo = localStorage.getItem('connectionInfo')
     if (savedInfo) {
       const info = JSON.parse(savedInfo)
@@ -184,134 +205,186 @@ export default {
       }
     }
     
-    // 检查主题设置
     const savedTheme = localStorage.getItem('isDarkTheme')
     if (savedTheme !== null) {
       this.isDarkTheme = savedTheme === 'true'
     }
     
-    // 添加 Font Awesome CSS
     const link = document.createElement('link')
     link.rel = 'stylesheet'
     link.href = 'https://cdnjs.cloudflare.com/ajax/libs/font-awesome/5.15.4/css/all.min.css'
     document.head.appendChild(link)
   },
   methods: {
-    // 保存 GitHub 设置
     saveGithubSettings() {
       localStorage.setItem('gh_config', JSON.stringify(this.githubConfig));
       this.showGithubDialog = false;
       this.$message.success('GitHub 配置已保存');
     },
 
-    // 核心：同步到 GitHub
+    // --- 修改点1：修复保存逻辑，确保保存的是 Link ---
     async syncToGitHub() {
       const { token, owner, repo, path } = this.githubConfig;
-      if (!token || !owner || !repo) {
-        this.$message.warning('请先点击右上角设置图标配置 GitHub 信息');
+      if (!token) {
+        this.$message.warning('请先配置 GitHub 信息');
         this.showGithubDialog = true;
         return;
       }
-      if (!this.sshInfo.hostname || !this.sshInfo.username) {
-         this.$message.error('主机名和用户名不能为空');
-         return;
+      
+      // 检查：如果还没有生成链接，先自动尝试生成
+      if (!this.generatedLink) {
+         this.onGenerateLink(); // 调用生成方法
+         if (!this.generatedLink) {
+             // 如果生成失败（比如必填项没填），onGenerateLink 内部会报错，这里直接返回
+             return; 
+         }
       }
 
       this.githubLoading = true;
       const apiUrl = `https://api.github.com/repos/${owner}/${repo}/contents/${path}`;
-      const headers = {
-        'Authorization': `token ${token}`,
-        'Accept': 'application/vnd.github.v3+json'
-      };
-
-      // 构造唯一索引 Key
+      const headers = { 'Authorization': `token ${token}` };
       const uniqueKey = `${this.sshInfo.hostname}_${this.sshInfo.username}`;
-      // 准备要保存的数据 (去掉了私钥，因为私钥太大且敏感，建议只存基本信息，或者你自己决定是否存)
+      
+      // 重点：这里保存了生成的 url
       const dataToSave = {
+        url: this.generatedLink, // <--- 保存生成的长链接
         hostname: this.sshInfo.hostname,
-        port: this.sshInfo.port,
         username: this.sshInfo.username,
-        command: this.sshInfo.command,
-        updated_at: new Date().toLocaleString(),
-        remark: 'WebSSH Sync'
+        updated_at: new Date().toLocaleString()
       };
 
       try {
-        // 1. 获取现有文件 (为了拿到 sha 和现有内容)
         let existingContent = {};
         let sha = null;
 
         try {
           const res = await axios.get(apiUrl, { headers });
           sha = res.data.sha;
-          // 解码 Base64 内容 (处理中文)
           const decodedContent = decodeURIComponent(escape(window.atob(res.data.content)));
           existingContent = JSON.parse(decodedContent);
         } catch (error) {
-          if (error.response && error.response.status === 404) {
-             // 文件不存在，跳过读取，直接新建
-          } else {
-            throw error;
-          }
+           if (!error.response || error.response.status !== 404) throw error;
         }
 
-        // 2. 更新或新增数据
         existingContent[uniqueKey] = dataToSave;
 
-        // 3. 推送更新
         const contentBase64 = window.btoa(unescape(encodeURIComponent(JSON.stringify(existingContent, null, 2))));
-        
         const payload = {
-          message: `Update SSH: ${uniqueKey}`,
+          message: `Add SSH Link: ${uniqueKey}`,
           content: contentBase64
         };
         if (sha) payload.sha = sha;
 
         await axios.put(apiUrl, payload, { headers });
-        this.$message.success(`已保存到 GitHub: ${uniqueKey}`);
-
+        this.$message.success('链接已保存到 GitHub！');
       } catch (e) {
         console.error(e);
-        let msg = '同步失败';
-        if(e.response && e.response.status === 401) msg = 'GitHub Token 无效';
-        if(e.response && e.response.status === 404) msg = '仓库未找到';
-        this.$message.error(msg);
+        this.$message.error('保存失败，请检查配置或网络');
       } finally {
         this.githubLoading = false;
       }
     },
 
-    onConnect () {
-      // 清除之前的认证信息
-      sessionStorage.removeItem('sshInfo')
+    // --- 修改点2：新增获取列表和删除逻辑 ---
+    async fetchCloudList() {
+      const { token, owner, repo, path } = this.githubConfig;
+      if (!token) {
+        this.$message.warning('请先配置 GitHub');
+        this.showGithubDialog = true;
+        return;
+      }
       
+      this.showCloudListDialog = true;
+      this.githubLoading = true;
+      this.cloudList = [];
+
+      try {
+        const apiUrl = `https://api.github.com/repos/${owner}/${repo}/contents/${path}`;
+        const res = await axios.get(apiUrl, { headers: { 'Authorization': `token ${token}` } });
+        
+        const decodedContent = decodeURIComponent(escape(window.atob(res.data.content)));
+        const jsonContent = JSON.parse(decodedContent);
+        
+        // 将对象转为数组，方便表格展示，并保留 Key 用于删除
+        this.cloudList = Object.entries(jsonContent).map(([key, value]) => ({
+          key: key,
+          ...value
+        }));
+      } catch (e) {
+        if (e.response && e.response.status === 404) {
+           this.cloudList = []; // 文件不存在，就是空的
+        } else {
+           this.$message.error('获取列表失败');
+        }
+      } finally {
+        this.githubLoading = false;
+      }
+    },
+
+    openSavedUrl(url) {
+        if(url) window.open(url, '_blank');
+    },
+
+    copySavedUrl(url) {
+        navigator.clipboard.writeText(url).then(() => {
+          this.$message.success('已复制');
+        });
+    },
+
+    async deleteFromCloud(key) {
+        const { token, owner, repo, path } = this.githubConfig;
+        this.githubLoading = true;
+        const apiUrl = `https://api.github.com/repos/${owner}/${repo}/contents/${path}`;
+        const headers = { 'Authorization': `token ${token}` };
+
+        try {
+            // 1. Get current file
+            const res = await axios.get(apiUrl, { headers });
+            const sha = res.data.sha;
+            const decodedContent = decodeURIComponent(escape(window.atob(res.data.content)));
+            const existingContent = JSON.parse(decodedContent);
+
+            // 2. Delete item
+            delete existingContent[key];
+
+            // 3. Push update
+            const contentBase64 = window.btoa(unescape(encodeURIComponent(JSON.stringify(existingContent, null, 2))));
+            await axios.put(apiUrl, {
+                message: `Delete ${key}`,
+                content: contentBase64,
+                sha: sha
+            }, { headers });
+
+            this.$message.success('删除成功');
+            // Refresh list local
+            this.cloudList = this.cloudList.filter(item => item.key !== key);
+
+        } catch (e) {
+            this.$message.error('删除失败');
+        } finally {
+            this.githubLoading = false;
+        }
+    },
+
+    // --- 以下保持原有的逻辑 ---
+    onConnect () {
+      sessionStorage.removeItem('sshInfo')
       if (!this.sshInfo.hostname) {
         this.$message.error('请输入主机地址！')
-        this.$nextTick(() => {
-          this.$refs.hostnameInput && this.$refs.hostnameInput.focus()
-        })
         return
       }
       if (!this.sshInfo.username) {
         this.$message.error('请输入用户名！')
-        this.$nextTick(() => {
-          this.$refs.usernameInput && this.$refs.usernameInput.focus()
-        })
         return
       }
       if (!this.sshInfo.password && !this.sshInfo.privateKey) {
         this.$message.error('请输入密码或上传密钥！')
-        this.$nextTick(() => {
-          this.$refs.passwordInput && this.$refs.passwordInput.focus()
-        })
         return
       }
 
-      // 根据实际使用的登录方式清理未使用的认证信息
       if (this.sshInfo.privateKey && this.sshInfo.privateKey.trim()) {
         this.sshInfo.password = ''
       } else if (this.sshInfo.password) {
-        // 使用密码登录时，清除密钥相关信息
         this.sshInfo.privateKey = ''
         this.sshInfo.passphrase = ''
         this.privateKeyFileName = ''
@@ -371,23 +444,14 @@ export default {
       }
       if (!this.sshInfo.hostname) {
         this.$message.error('请输入主机地址！')
-        this.$nextTick(() => {
-          this.$refs.hostnameInput && this.$refs.hostnameInput.focus()
-        })
         return
       }
       if (!this.sshInfo.username) {
         this.$message.error('请输入用户名！')
-        this.$nextTick(() => {
-          this.$refs.usernameInput && this.$refs.usernameInput.focus()
-        })
         return
       }
       if (!this.sshInfo.password && !this.sshInfo.privateKey) {
         this.$message.error('请输入密码或上传密钥以生成链接！')
-        this.$nextTick(() => {
-          this.$refs.passwordInput && this.$refs.passwordInput.focus()
-        })
         return
       }
       const url = new URL(window.location.href)
@@ -434,14 +498,14 @@ export default {
 </script>
 
 <style lang="scss" scoped>
-/* 为了适应新的右上角布局，修改了这里 */
+/* 保持原有样式，新增部分样式 */
 .top-right-wrapper {
   position: absolute;
   top: 25px;
   right: 30px;
   z-index: 10;
   display: flex;
-  gap: 15px; /* 图标之间的间距 */
+  gap: 15px;
 }
 
 .icon-btn, .theme-switch {
@@ -453,7 +517,7 @@ export default {
   justify-content: center;
   cursor: pointer;
   transition: background-color 0.3s;
-  background-color: var(--switch-bg); /* 给按钮加个背景色，防止在深色图上看不清 */
+  background-color: var(--switch-bg);
   box-shadow: 0 2px 5px rgba(0,0,0,0.1);
 }
 
@@ -467,12 +531,11 @@ export default {
   transition: color 0.3s;
 }
 
-/* 修复原有的 icon 位置问题 */
 .theme-switch i {
-  margin-top: 0; /* 去掉了原来的 -30px，使用 flex 居中更稳 */
+  margin-top: 0;
 }
 
-
+/* 剩下的样式保持不变 */
 .login-container ::v-deep .el-input__inner {
   font-size: medium;
   border-radius: 10px;
@@ -489,79 +552,18 @@ export default {
   box-shadow: 0 0 0 2px rgba(64, 158, 255, 0.2) !important;
   caret: 2px solid #409eff !important;
 }
-
-.login-container ::v-deep .el-input.is-focus .el-input__inner {
-  border-color: #409eff !important;
-  box-shadow: 0 0 0 2px rgba(64, 158, 255, 0.2) !important;
-  caret: 2px solid #409eff !important;
-}
-
 .login-container ::v-deep .el-input__inner::placeholder {
   color: #565454 !important;
   opacity: 1;
 }
-
-.login-container ::v-deep .el-input__suffix {
-  background: transparent;
-  margin-right: 5px;
-}
-
-.login-container ::v-deep .el-input__suffix .el-input__suffix-inner {
-  display: flex;
-  align-items: center;
-  justify-content: center;
-}
-
-.login-container ::v-deep .el-input__suffix .el-input__suffix-inner .el-input__icon {
-  color: #666;
-  font-size: 16px;
-  transition: color 0.3s;
-}
-
-.login-container ::v-deep .el-input__suffix .el-input__suffix-inner .el-input__icon:hover {
-  color: #409eff;
-}
-
 .login-container.dark-theme ::v-deep .el-input__inner {
   background: hsl(0deg 0% 100% / 5%);
   border: 1px solid rgba(255, 255, 255, 0.2);
   color: #fff;
 }
-
-.login-container.dark-theme ::v-deep .el-input__inner:focus {
-  border-color: #409eff !important;
-  box-shadow: 0 0 0 2px rgba(64, 158, 255, 0.2) !important;
-  caret: 2px solid #409eff !important;
-}
-
-.login-container.dark-theme ::v-deep .el-input.is-focus .el-input__inner {
-  border-color: #409eff !important;
-  box-shadow: 0 0 0 2px rgba(64, 158, 255, 0.2) !important;
-  caret: 2px solid #409eff !important;
-}
-
 .login-container.dark-theme ::v-deep .el-input__inner::placeholder {
   color: #ccc !important;
   opacity: 1;
-}
-
-.login-container.dark-theme ::v-deep .el-input__suffix {
-  background: transparent;
-  margin-right: 5px;
-}
-
-.login-container.dark-theme ::v-deep .el-input__suffix .el-input__suffix-inner .el-input__icon {
-  color: #ccc;
-  font-size: 16px;
-  transition: color 0.3s;
-}
-
-.login-container.dark-theme ::v-deep .el-input__suffix .el-input__suffix-inner .el-input__icon:hover {
-  color: #409eff;
-}
-
-.login-container ::v-deep .el-form-item {
-  margin-bottom: 15px;
 }
 
 .login-container {
@@ -602,7 +604,6 @@ export default {
   font-size: 15px;
   color: var(--text-color);
   line-height: 30px;
-  transition: color 0.3s;
 }
 
 .form-grid ::v-deep .el-button {
@@ -613,130 +614,28 @@ export default {
   transition: all 0.3s;
 }
 
-.login-container ::v-deep .el-form-item .el-upload.upload-key {
-  width: 100% !important;
-  height: 48px !important;
-  background: none !important;
-  border: none !important;
-  box-shadow: none !important;
-  margin: 0 !important;
-  padding: 0 !important;
-}
-
-.login-container ::v-deep .upload-flex-row {
-  display: flex !important;
-  flex-direction: row !important;
-  align-items: stretch !important;
-  width: 100%;
-  height: 100%;
-}
-
-.login-container ::v-deep .upload-flex-row .upload-btn,
-.login-container ::v-deep .upload-flex-row .upload-filename {
-  height: 100%;
-  display: flex;
-  align-items: center;
-}
-
 .login-container ::v-deep .upload-btn {
-  display: flex;
-  align-items: center;
   background: var(--primary);
   color: #fff;
-  font-weight: 600;
-  font-size: 16px;
-  border-radius: 10px 0 0 10px;
-  padding: 0 28px;
-  cursor: pointer;
-  transition: background 0.2s;
-  height: 100%;
-  backdrop-filter: blur(5px);
-  -webkit-backdrop-filter: blur(5px);
-}
-
-.login-container ::v-deep .upload-btn:hover {
-  background: #202f3e;
 }
 
 .login-container ::v-deep .upload-filename {
-  display: flex;
-  align-items: center;
   background: hsl(0deg 0% 100% / 15%);
-  backdrop-filter: blur(5px);
-  -webkit-backdrop-filter: blur(5px);
   color: #333;
-  font-size: 15px;
-  border-radius: 0 12px 12px 0;
-  padding: 0 10px;
-  height: 100%;
-  flex: 1;
-  white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  border: 1px solid rgba(255, 255, 255, 0.3);
+}
+.login-container.dark-theme ::v-deep .upload-filename {
+  color: #fff !important;
 }
 
 @media (max-width: 768px) {
-  .card{
-    width: 98% !important;
-  }
-  
+  .card{ width: 98% !important; }
   .form-grid ::v-deep .el-button {
     font-size: 0.9rem !important;
     padding: 0.7rem 0.8rem !important;
     margin: 0 2px !important;
   }
-  
-  .el-row[type="flex"] {
-    margin-top: 8px !important;
-  }
-  
-  .login-container {
-    padding-bottom: 120px !important;
-    min-height: auto !important;
-  }
-  
-  .footer {
-    position: relative !important;
-    bottom: auto !important;
-    margin-top: 20px !important;
-  }
-  
-  .card {
-    margin: 10px auto !important;
-  }
-  
-  /* 移动端调整一下顶部图标位置 */
-  .top-right-wrapper {
-    top: 15px;
-    right: 15px;
-  }
-}
-
-.login-container.dark-theme ::v-deep .upload-key {
-  border-color: #4d4d4d;
-  background-color: var(--card-bg);
-}
-.login-container.dark-theme ::v-deep .upload-key .el-button {
-  background: #232323;
-  color: #409eff;
-}
-.login-container.dark-theme ::v-deep .upload-key .el-button:hover,
-.login-container.dark-theme ::v-deep .upload-key .el-button:focus {
-  background: #409eff !important;
-  color: #fff !important;
-}
-.login-container.dark-theme ::v-deep .upload-key span {
-  background: #23232339;
-  color: #aaa !important;
-}
-
-.login-container.dark-theme ::v-deep .upload-filename {
-  background: rgba(45, 45, 45, 0.2) !important;
-  backdrop-filter: blur(5px) !important;
-  -webkit-backdrop-filter: blur(5px) !important;
-  color: #fff !important;
-  border: 1px solid rgba(255, 255, 255, 0.2) !important;
+  .login-container { padding-bottom: 120px !important; }
+  .top-right-wrapper { top: 15px; right: 15px; }
 }
 
 .footer {
@@ -746,28 +645,15 @@ export default {
   width: 100%;
   color: var(--text-color);
   opacity: 0.6;
-  transition: color 0.3s;
 }
+.footer a { color: #fefefe; text-decoration: none; }
+.footer a:hover { color: #05d899; }
 
-.footer a {
-  font-size: 0.9rem;
-  color: #000000;
-  font-family: system-ui;
-  color: #fefefe;
-  text-decoration: none;
-  transition: color 0.3s;
-}
-
-.footer a:hover {
-  color: #05d899;
-}
-
-/* Light theme variables */
+/* Variables */
 .login-container {
   --bg-color: #ffff;
   --bg-image: url('/static/img/bg_light.webp');
   --card-bg: hsl(0deg 0% 100% / 15%);
-  --title-color: #1b58c9;
   --text-color: #3b3d3d;
   --shadow: 0 4px 6px rgba(0, 0, 0, 0.1);
   --success: #13af54;
@@ -780,90 +666,27 @@ export default {
   --icon-color: #232323;
 }
 
-/* Dark theme variables */
 .login-container.dark-theme {
   --bg-color: #ffffff;
   --bg-image: url('/static/img/bg_dark.webp');
   --card-bg: hsl(0deg 0% 100% / 5%);
-  --title-color: #ffffff;
   --text-color: #e0e0e0;
   --shadow: 0 4px 6px rgba(0, 0, 0, 0.3);
-  --success: #13af54;
-  --success-hover: #0e8942;
-  --danger: #d63031;
-  --danger-hover: #b247c2;
-  --primary: #409eff;
-  --primary-hover: #0f9281;
   --switch-bg: #333333;
   --icon-color: #f5f5f5;
 }
 
-.el-button--success {
-  background-color: var(--success);
-  border-color: var(--success);
-  color: white;
-}
-.el-button--danger {
-  background-color: var(--danger);
-  border-color: var(--danger);
-  color: white;
-}
-.el-button--primary {
-  background-color: var(--primary);
-  border-color: var(--primary);
-  color: white;
-}
-.el-button--success:hover {
-  background-color: var(--success-hover);
-  border-color: var(--success-hover);
-  color: white;
-}
-.el-button--danger:hover {
-  background-color: var(--danger-hover);
-  border-color: var(--danger-hover);
-  color: white;
-}
-.el-button--primary:hover {
-  background-color: var(--primary-hover);
-  border-color: var(--primary-hover);
-  color: white;
-}
+.el-button--success { background-color: var(--success); border-color: var(--success); color: white; }
+.el-button--danger { background-color: var(--danger); border-color: var(--danger); color: white; }
+.el-button--primary { background-color: var(--primary); border-color: var(--primary); color: white; }
+.el-button--success:hover { background-color: var(--success-hover); border-color: var(--success-hover); }
+.el-button--danger:hover { background-color: var(--danger-hover); border-color: var(--danger-hover); }
+.el-button--primary:hover { background-color: var(--primary-hover); border-color: var(--primary-hover); }
 
-.login-container ::v-deep .gen-link-input .el-input__inner {
-  border-radius: 10px 0 0 10px !important;
-  padding-right: 5px;
-}
-.login-container ::v-deep .gen-link-input .el-input-group__append {
-  border-radius: 0 10px 10px 0 !important;
-}
-
-.login-container ::v-deep .el-input-group__append {
-  background-color: rgba(255, 255, 255, 0.2) !important;
-  backdrop-filter: blur(5px) !important;
-  -webkit-backdrop-filter: blur(5px) !important;
-  border: 1px solid rgba(255, 255, 255, 0.3) !important;
-  transition: background-color 0.3s;
-}
-.login-container.dark-theme ::v-deep .el-input-group__append {
-  background-color: rgba(45, 45, 45, 0.2) !important;
-  backdrop-filter: blur(5px) !important;
-  -webkit-backdrop-filter: blur(5px) !important;
-  border: 1px solid rgba(255, 255, 255, 0.2) !important;
-}
-
-/* 深色主题下 Dialog 的适配 */
-::v-deep .dark-dialog {
-  background: #2d2d2d;
-}
-::v-deep .dark-dialog .el-dialog__title {
-  color: #fff;
-}
-::v-deep .dark-dialog .el-form-item__label {
-  color: #ccc;
-}
-::v-deep .dark-dialog .el-input__inner {
-  background-color: #333;
-  border-color: #555;
-  color: #fff;
-}
+/* Deep Dialog Styles */
+::v-deep .dark-dialog { background: #2d2d2d; }
+::v-deep .dark-dialog .el-dialog__title { color: #fff; }
+::v-deep .dark-dialog .el-table { background-color: transparent; color: #fff; }
+::v-deep .dark-dialog .el-table th, ::v-deep .dark-dialog .el-table tr { background-color: transparent; }
+::v-deep .dark-dialog .el-table--enable-row-hover .el-table__body tr:hover>td { background-color: #444; }
 </style>

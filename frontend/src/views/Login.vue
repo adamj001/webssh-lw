@@ -715,4 +715,39 @@ export default {
   background-color: #444;
 }
 </style>
+<style>
+/* 1. 强制覆盖鼠标悬浮时的背景色 (核心修复) */
+.dark-dialog .el-table--enable-row-hover .el-table__body tr:hover > td {
+  background-color: #454545 !important; /* 使用深灰色，而不是默认的白色 */
+  color: #ffffff !important;            /* 强制文字显示为白色 */
+}
+
+/* 2. 确保表格的基础背景是透明的，且文字是白色的 */
+.dark-dialog .el-table,
+.dark-dialog .el-table__expanded-cell {
+  background-color: transparent !important;
+  color: #e0e0e0 !important;
+}
+
+.dark-dialog .el-table th,
+.dark-dialog .el-table tr,
+.dark-dialog .el-table td {
+  background-color: transparent !important;
+  border-bottom: 1px solid #444 !important; /* 分割线颜色 */
+}
+
+/* 3. 去掉表格底部的白线 */
+.dark-dialog .el-table::before {
+  height: 0px !important;
+}
+
+/* 4. 修复弹窗本身的背景色 (以防万一) */
+.dark-dialog.el-dialog {
+  background: #2d2d2d !important;
+}
+.dark-dialog .el-dialog__title {
+  color: #fff !important;
+}
+</style>
+
 
